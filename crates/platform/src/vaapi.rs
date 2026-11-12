@@ -5,11 +5,13 @@
 //! host side with the software decoder's own parsers and DPB (so the two decide alike), [`va`]
 //! drives libva (loaded at run time; no libva means no hardware decoder, never a failure to start),
 //! and [`VaDecoder`] puts them together as a [`VideoDecoder`]. H.264 8-bit 4:2:0 progressive
-//! (Constrained Baseline / Main / High) and HEVC 4:2:0 (Main, Main 10, Main Still Picture), the
-//! latter through [`hevc`] the same way; everything else stays in software.
+//! (Constrained Baseline / Main / High), HEVC 4:2:0 (Main, Main 10, Main Still Picture) through
+//! [`hevc`] the same way, and AV1 4:2:0 (Main profile, 8 and 10 bits) through [`av1`]; everything
+//! else stays in software.
 //!
 //! The FFI is in [`ffi`] (declarations) and `va` (calls); the rest of this module is safe code.
 
+pub mod av1;
 pub mod ffi;
 pub mod h264;
 pub mod hevc;
@@ -23,7 +25,7 @@ mod abi_tests;
 mod tests;
 
 #[cfg(target_os = "linux")]
-pub use linux::VaDecoder;
+pub use linux::{VaAv1Decoder, VaDecoder};
 
 use filmcraft_frame::VideoFrame;
 
@@ -50,6 +52,14 @@ pub trait Accel: Send {
         iq: Option<&ffi::VAIQMatrixBufferHEVC>,
         slices: &[(ffi::VASliceParameterBufferHEVC, Vec<u8>)],
     ) -> std::result::Result<(), String>;
+    /// Decode one AV1 frame (its tiles: parameters and the tile's coded data) into surface
+    /// `target`.
+    fn decode_av1(
+        &mut self,
+        target: usize,
+        pic: &ffi::VADecPictureParameterBufferAV1,
+        tiles: &[(ffi::VASliceParameterBufferAV1, Vec<u8>)],
+    ) -> std::result::Result<(), String>;
     /// The picture in surface `index`, once decoded.
     fn read(&mut self, index: usize) -> std::result::Result<VideoFrame, String>;
     /// Make surface `index` a copy of surface `from`, or mid-gray (every sample half the range)
@@ -61,11 +71,11 @@ pub trait Accel: Send {
 #[cfg(target_os = "linux")]
 mod linux {
     use filmcraft_bitstream::unescape_rbsp;
-    use filmcraft_codecs::hw::{NalCodec, NalStreamInfo};
+    use filmcraft_codecs::hw::{FrameCodec, FrameStreamInfo, NalCodec, NalStreamInfo};
     use filmcraft_codecs::{CodecError, DecodedFrame, Result, VideoDecoder};
 
     use super::va::Session;
-    use super::{ffi, h264, hevc};
+    use super::{av1, ffi, h264, hevc};
     use crate::biplanar::Geometry;
 
     /// The VA-API profiles that decode an H.264 stream of `profile_idc`, best fit first (a Main or
@@ -212,6 +222,65 @@ mod linux {
 
         fn is_disposable(&self, sample: &[u8]) -> bool {
             self.info.is_disposable(sample)
+        }
+    }
+
+    /// A VA-API decoder for one AV1 stream (Main profile, 8- or 10-bit 4:2:0).
+    pub struct VaAv1Decoder {
+        front: av1::Front<Session>,
+        info: FrameStreamInfo,
+        name: String,
+    }
+
+    impl VaAv1Decoder {
+        /// A decoder for the stream `info` describes, or why VA-API does not take it on this system.
+        pub fn new(info: FrameStreamInfo) -> std::result::Result<Self, String> {
+            if info.codec != FrameCodec::Av1 {
+                return Err("not an AV1 stream".into());
+            }
+            let bits = info.bit_depth;
+            if info.profile != 0 || info.mono || info.subsampling != (1, 1) || !matches!(bits, 8 | 10) {
+                return Err(format!(
+                    "AV1 profile {} at {bits}-bit ({}chroma subsampling {:?}) is not taken",
+                    info.profile,
+                    if info.mono { "monochrome, " } else { "" },
+                    info.subsampling
+                ));
+            }
+            let (w, h) = info.size;
+            if w == 0 || h == 0 {
+                return Err("no picture size".into());
+            }
+            let color = info.color.unwrap_or(filmcraft_color::ColorInfo::REC709);
+            let geometry = Geometry { crop: (0, 0, w, h), bits, color, par: (1, 1) };
+            // the display pictures of film grain only for a stream that announces it
+            let grain = filmcraft_av1::hw::HeaderParser::announces_film_grain(&info.config_obus);
+            let count = if grain { av1::SURFACES_WITH_GRAIN } else { av1::SURFACES };
+            let session = Session::new(&[ffi::VAProfileAV1Profile0], info.size, count, geometry)?;
+            let name = format!("VA-API AV1 ({})", session.vendor());
+            Ok(Self { front: av1::Front::new(session, info.config_obus.clone(), info.size, bits), info, name })
+        }
+    }
+
+    impl VideoDecoder for VaAv1Decoder {
+        fn decode(&mut self, sample: &[u8], pts: i64) -> Result<Vec<DecodedFrame>> {
+            self.front.decode(sample, pts)
+        }
+
+        fn flush(&mut self) -> Vec<DecodedFrame> {
+            self.front.flush()
+        }
+
+        fn reset(&mut self) {
+            self.front.reset();
+        }
+
+        fn name(&self) -> &str {
+            &self.name
+        }
+
+        fn is_random_access(&self, sample: &[u8]) -> Option<bool> {
+            Some(self.info.is_random_access(sample))
         }
     }
 }

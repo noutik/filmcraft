@@ -12,6 +12,7 @@ mod decoder;
 mod frame;
 mod grain;
 mod header;
+pub mod hw;
 mod inter;
 mod inter_info;
 mod intra;

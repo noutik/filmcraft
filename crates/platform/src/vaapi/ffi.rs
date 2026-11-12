@@ -1,4 +1,4 @@
-// The declarations in this file are transcribed from libva's `va/va.h`, `va/va_dec_hevc.h` and `va/va_drm.h`
+// The declarations in this file are transcribed from libva's `va/va.h`, `va/va_dec_hevc.h`, `va/va_dec_av1.h` and `va/va_drm.h`
 // (VA-API 1.23, libva 2.23), which carry this notice:
 //
 // Copyright (c) 2007-2009 Intel Corporation. All Rights Reserved.
@@ -23,8 +23,8 @@
 // TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 // SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-//! VA-API (`va.h`, `va_dec_hevc.h`, `va_drm.h`; MIT-licensed headers by Intel) as `libva.so.2` /
-//! `libva-drm.so.2` expect it: the H.264 and HEVC decode buffers this backend fills in, the image structures it reads back
+//! VA-API (`va.h`, `va_dec_hevc.h`, `va_dec_av1.h`, `va_drm.h`; MIT-licensed headers by Intel) as `libva.so.2` /
+//! `libva-drm.so.2` expect it: the H.264, HEVC and AV1 decode buffers this backend fills in, the image structures it reads back
 //! through, and the entry points it calls. Written from the public header; sizes and field offsets
 //! are checked against a C compiler's by `abi_tests.rs`.
 //!
@@ -70,6 +70,7 @@ pub const VAProfileH264High: VAProfile = 7;
 pub const VAProfileH264ConstrainedBaseline: VAProfile = 13;
 pub const VAProfileHEVCMain: VAProfile = 17;
 pub const VAProfileHEVCMain10: VAProfile = 18;
+pub const VAProfileAV1Profile0: VAProfile = 32;
 pub const VAEntrypointVLD: VAEntrypoint = 1;
 
 pub const VAConfigAttribRTFormat: VAConfigAttribType = 0;
@@ -437,6 +438,228 @@ pub struct VAImage {
     pub num_palette_entries: i32,
     pub entry_bytes: i32,
     pub component_order: [i8; 4],
+    pub va_reserved: [u32; VA_PADDING_LOW],
+}
+
+/// `VASegmentationStructAV1`; `segment_info_fields` is a C bit-field union stored as its `value`
+/// word ([`av1_seg_bits`]).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VASegmentationStructAV1 {
+    pub segment_info_fields: u32,
+    pub feature_data: [[i16; 8]; 8],
+    pub feature_mask: [u8; 8],
+    pub va_reserved: [u32; VA_PADDING_LOW],
+}
+
+/// `VASegmentationStructAV1::segment_info_fields` bit positions.
+pub mod av1_seg_bits {
+    pub const ENABLED: u32 = 0;
+    pub const UPDATE_MAP: u32 = 1;
+    pub const TEMPORAL_UPDATE: u32 = 2;
+    pub const UPDATE_DATA: u32 = 3;
+}
+
+/// `VAFilmGrainStructAV1`; `film_grain_info_fields` as its `value` word ([`av1_grain_bits`]).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VAFilmGrainStructAV1 {
+    pub film_grain_info_fields: u32,
+    pub grain_seed: u16,
+    pub num_y_points: u8,
+    pub point_y_value: [u8; 14],
+    pub point_y_scaling: [u8; 14],
+    pub num_cb_points: u8,
+    pub point_cb_value: [u8; 10],
+    pub point_cb_scaling: [u8; 10],
+    pub num_cr_points: u8,
+    pub point_cr_value: [u8; 10],
+    pub point_cr_scaling: [u8; 10],
+    pub ar_coeffs_y: [i8; 24],
+    pub ar_coeffs_cb: [i8; 25],
+    pub ar_coeffs_cr: [i8; 25],
+    pub cb_mult: u8,
+    pub cb_luma_mult: u8,
+    pub cb_offset: u16,
+    pub cr_mult: u8,
+    pub cr_luma_mult: u8,
+    pub cr_offset: u16,
+    pub va_reserved: [u32; VA_PADDING_LOW],
+}
+
+/// `VAFilmGrainStructAV1::film_grain_info_fields` bit positions (the four after
+/// `CHROMA_SCALING_FROM_LUMA` are 2 bits each).
+pub mod av1_grain_bits {
+    pub const APPLY_GRAIN: u32 = 0;
+    pub const CHROMA_SCALING_FROM_LUMA: u32 = 1;
+    pub const GRAIN_SCALING_MINUS_8: u32 = 2;
+    pub const AR_COEFF_LAG: u32 = 4;
+    pub const AR_COEFF_SHIFT_MINUS_6: u32 = 6;
+    pub const GRAIN_SCALE_SHIFT: u32 = 8;
+    pub const OVERLAP_FLAG: u32 = 10;
+    pub const CLIP_TO_RESTRICTED_RANGE: u32 = 11;
+}
+
+/// `VAWarpedMotionParamsAV1` (`wmtype` is a C enum: `int`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VAWarpedMotionParamsAV1 {
+    pub wmtype: c_int,
+    pub wmmat: [i32; 8],
+    pub invalid: u8,
+    pub va_reserved: [u32; VA_PADDING_LOW],
+}
+
+/// `VADecPictureParameterBufferAV1`; the bit-field unions are stored as their `value` words
+/// ([`av1_seq_bits`], [`av1_pic_bits`], [`av1_lf_bits`], [`av1_qm_bits`], [`av1_mode_bits`],
+/// [`av1_lr_bits`]). `anchor_frames_list` is a `VASurfaceID *` used by large scale tile decoding
+/// only; it is declared as a pointer-sized integer and always 0 (null), so the structure is plain
+/// data.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VADecPictureParameterBufferAV1 {
+    pub profile: u8,
+    pub order_hint_bits_minus_1: u8,
+    pub bit_depth_idx: u8,
+    pub matrix_coefficients: u8,
+    pub seq_info_fields: u32,
+    pub current_frame: VASurfaceID,
+    pub current_display_picture: VASurfaceID,
+    pub anchor_frames_num: u8,
+    pub anchor_frames_list: usize,
+    pub frame_width_minus1: u16,
+    pub frame_height_minus1: u16,
+    pub output_frame_width_in_tiles_minus_1: u16,
+    pub output_frame_height_in_tiles_minus_1: u16,
+    pub ref_frame_map: [VASurfaceID; 8],
+    pub ref_frame_idx: [u8; 7],
+    pub primary_ref_frame: u8,
+    pub order_hint: u8,
+    pub seg_info: VASegmentationStructAV1,
+    pub film_grain_info: VAFilmGrainStructAV1,
+    pub tile_cols: u8,
+    pub tile_rows: u8,
+    pub width_in_sbs_minus_1: [u16; 63],
+    pub height_in_sbs_minus_1: [u16; 63],
+    pub tile_count_minus_1: u16,
+    pub context_update_tile_id: u16,
+    pub pic_info_fields: u32,
+    pub superres_scale_denominator: u8,
+    pub interp_filter: u8,
+    pub filter_level: [u8; 2],
+    pub filter_level_u: u8,
+    pub filter_level_v: u8,
+    pub loop_filter_info_fields: u8,
+    pub ref_deltas: [i8; 8],
+    pub mode_deltas: [i8; 2],
+    pub base_qindex: u8,
+    pub y_dc_delta_q: i8,
+    pub u_dc_delta_q: i8,
+    pub u_ac_delta_q: i8,
+    pub v_dc_delta_q: i8,
+    pub v_ac_delta_q: i8,
+    pub qmatrix_fields: u16,
+    pub mode_control_fields: u32,
+    pub cdef_damping_minus_3: u8,
+    pub cdef_bits: u8,
+    pub cdef_y_strengths: [u8; 8],
+    pub cdef_uv_strengths: [u8; 8],
+    pub loop_restoration_fields: u16,
+    pub wm: [VAWarpedMotionParamsAV1; 7],
+    pub va_reserved: [u32; VA_PADDING_MEDIUM],
+}
+
+/// `VADecPictureParameterBufferAV1::seq_info_fields` bit positions.
+pub mod av1_seq_bits {
+    pub const STILL_PICTURE: u32 = 0;
+    pub const USE_128X128_SUPERBLOCK: u32 = 1;
+    pub const ENABLE_FILTER_INTRA: u32 = 2;
+    pub const ENABLE_INTRA_EDGE_FILTER: u32 = 3;
+    pub const ENABLE_INTERINTRA_COMPOUND: u32 = 4;
+    pub const ENABLE_MASKED_COMPOUND: u32 = 5;
+    pub const ENABLE_DUAL_FILTER: u32 = 6;
+    pub const ENABLE_ORDER_HINT: u32 = 7;
+    pub const ENABLE_JNT_COMP: u32 = 8;
+    pub const ENABLE_CDEF: u32 = 9;
+    pub const MONO_CHROME: u32 = 10;
+    pub const COLOR_RANGE: u32 = 11;
+    pub const SUBSAMPLING_X: u32 = 12;
+    pub const SUBSAMPLING_Y: u32 = 13;
+    pub const FILM_GRAIN_PARAMS_PRESENT: u32 = 15;
+}
+
+/// `VADecPictureParameterBufferAV1::pic_info_fields` bit positions (`frame_type` 2 bits).
+pub mod av1_pic_bits {
+    pub const FRAME_TYPE: u32 = 0;
+    pub const SHOW_FRAME: u32 = 2;
+    pub const SHOWABLE_FRAME: u32 = 3;
+    pub const ERROR_RESILIENT_MODE: u32 = 4;
+    pub const DISABLE_CDF_UPDATE: u32 = 5;
+    pub const ALLOW_SCREEN_CONTENT_TOOLS: u32 = 6;
+    pub const FORCE_INTEGER_MV: u32 = 7;
+    pub const ALLOW_INTRABC: u32 = 8;
+    pub const USE_SUPERRES: u32 = 9;
+    pub const ALLOW_HIGH_PRECISION_MV: u32 = 10;
+    pub const IS_MOTION_MODE_SWITCHABLE: u32 = 11;
+    pub const USE_REF_FRAME_MVS: u32 = 12;
+    pub const DISABLE_FRAME_END_UPDATE_CDF: u32 = 13;
+    pub const UNIFORM_TILE_SPACING: u32 = 14;
+    pub const ALLOW_WARPED_MOTION: u32 = 15;
+    pub const LARGE_SCALE_TILE: u32 = 16;
+}
+
+/// `VADecPictureParameterBufferAV1::loop_filter_info_fields` bit positions (`sharpness_level` 3 bits).
+pub mod av1_lf_bits {
+    pub const SHARPNESS_LEVEL: u32 = 0;
+    pub const MODE_REF_DELTA_ENABLED: u32 = 3;
+    pub const MODE_REF_DELTA_UPDATE: u32 = 4;
+}
+
+/// `VADecPictureParameterBufferAV1::qmatrix_fields` bit positions (the levels are 4 bits each).
+pub mod av1_qm_bits {
+    pub const USING_QMATRIX: u32 = 0;
+    pub const QM_Y: u32 = 1;
+    pub const QM_U: u32 = 5;
+    pub const QM_V: u32 = 9;
+}
+
+/// `VADecPictureParameterBufferAV1::mode_control_fields` bit positions (the `log2` fields and
+/// `tx_mode` are 2 bits each).
+pub mod av1_mode_bits {
+    pub const DELTA_Q_PRESENT: u32 = 0;
+    pub const LOG2_DELTA_Q_RES: u32 = 1;
+    pub const DELTA_LF_PRESENT: u32 = 3;
+    pub const LOG2_DELTA_LF_RES: u32 = 4;
+    pub const DELTA_LF_MULTI: u32 = 6;
+    pub const TX_MODE: u32 = 7;
+    pub const REFERENCE_SELECT: u32 = 9;
+    pub const REDUCED_TX_SET_USED: u32 = 10;
+    pub const SKIP_MODE_PRESENT: u32 = 11;
+}
+
+/// `VADecPictureParameterBufferAV1::loop_restoration_fields` bit positions (the types and
+/// `lr_unit_shift` are 2 bits each).
+pub mod av1_lr_bits {
+    pub const YFRAME_RESTORATION_TYPE: u32 = 0;
+    pub const CBFRAME_RESTORATION_TYPE: u32 = 2;
+    pub const CRFRAME_RESTORATION_TYPE: u32 = 4;
+    pub const LR_UNIT_SHIFT: u32 = 6;
+    pub const LR_UV_SHIFT: u32 = 8;
+}
+
+/// `VASliceParameterBufferAV1`: one tile.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct VASliceParameterBufferAV1 {
+    pub slice_data_size: u32,
+    pub slice_data_offset: u32,
+    pub slice_data_flag: u32,
+    pub tile_row: u16,
+    pub tile_column: u16,
+    pub tg_start: u16,
+    pub tg_end: u16,
+    pub anchor_frame_idx: u8,
+    pub tile_idx_in_tile_list: u16,
     pub va_reserved: [u32; VA_PADDING_LOW],
 }
 
